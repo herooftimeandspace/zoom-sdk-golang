@@ -44,11 +44,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4  # TODO: pin to a specific SHA
 
+      - uses: actions/checkout@v4  # TODO: pin to a specific SHA
+        with:
+          repository: herooftimeandspace/zoom-sdk-python
+          ref: dev
+          path: zoom-sdk-python
+
       - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
         with:
           go-version-file: go.mod
 
       - name: Verify vendored parity assets are in sync
+        env:
+          ZOOM_SDK_PYTHON_ROOT: ${{ github.workspace }}/zoom-sdk-python
         run: go run ./scripts/parity sync --check
 
       - name: Run vendored parity checks

@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,43 @@ func TestBuildHeadersPreservesSDKAuthorization(t *testing.T) {
 	}
 	if headers["X-Test"] != "value" {
 		t.Fatal("expected custom header to be preserved")
+	}
+}
+
+func TestNewClientConstructsSDK(t *testing.T) {
+	settings := DefaultSettings()
+	client, err := NewClient(settings, "test-token")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if client.SDK == nil {
+		t.Fatal("expected SDK to be initialized")
+	}
+	if client.DefaultAccountID() != settings.AccountID {
+		t.Fatalf("unexpected default account id: %s", client.DefaultAccountID())
+	}
+	if nilClient := (*Client)(nil); nilClient.DefaultAccountID() != "" {
+		t.Fatal("nil client should not return an account id")
+	}
+}
+
+func TestClientRequestRejectsUnmarshalableJSONBody(t *testing.T) {
+	settings := DefaultSettings()
+	settings.BaseURL = "https://api.zoom.us/v2"
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("request should fail before transport")
+		return nil, nil
+	})}
+	client := &Client{
+		settings:       settings,
+		httpClient:     httpClient,
+		logger:         DefaultLogger(),
+		schemaRegistry: &SchemaRegistry{},
+		tokenManager:   NewTokenManager(httpClient, settings, "test-token", DefaultLogger()),
+	}
+	_, err := client.Request(context.Background(), "POST", "/users", RequestOptions{JSONBody: make(chan int)})
+	if err == nil || !strings.Contains(err.Error(), "unsupported type") {
+		t.Fatalf("expected JSON marshal error, got %v", err)
 	}
 }
 

@@ -102,7 +102,10 @@ func parityPaths(repoRoot string) (*paritySyncPaths, error) {
 	if root == "" {
 		root = discoverProjectRoot(".")
 	}
-	pythonRoot := filepath.Join(filepath.Dir(root), "zoom-sdk-python")
+	pythonRoot := os.Getenv("ZOOM_SDK_PYTHON_ROOT")
+	if pythonRoot == "" {
+		pythonRoot = filepath.Join(filepath.Dir(root), "zoom-sdk-python")
+	}
 	if _, err := os.Stat(pythonRoot); err != nil {
 		return nil, fmt.Errorf("zoom-sdk-python source repo not found at %s", pythonRoot)
 	}
