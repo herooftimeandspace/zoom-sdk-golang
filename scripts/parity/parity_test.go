@@ -231,6 +231,27 @@ func TestParityPathAndVerificationErrorBranches(t *testing.T) {
 	}
 }
 
+func TestParityPathsUsesExplicitPythonRoot(t *testing.T) {
+	tmp := t.TempDir()
+	goRoot := filepath.Join(tmp, "repo", "zoom-sdk-golang")
+	pythonRoot := filepath.Join(tmp, "python-source")
+	if err := os.MkdirAll(goRoot, 0o755); err != nil {
+		t.Fatalf("mkdir go root: %v", err)
+	}
+	if err := os.MkdirAll(pythonRoot, 0o755); err != nil {
+		t.Fatalf("mkdir python root: %v", err)
+	}
+	t.Setenv("ZOOM_SDK_PYTHON_ROOT", pythonRoot)
+
+	paths, err := parityPaths(goRoot)
+	if err != nil {
+		t.Fatalf("parity paths: %v", err)
+	}
+	if got := paths.schemaPairs[0].source; !strings.HasPrefix(got, pythonRoot) {
+		t.Fatalf("expected explicit python root in source path, got %s", got)
+	}
+}
+
 func TestDirectoryEntriesUnexpectedError(t *testing.T) {
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "file.txt")

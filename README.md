@@ -27,11 +27,76 @@ The Go runtime currently includes:
 - schema asset loading from bundled OpenAPI documents
 - webhook validation backed by vendored OpenAPI webhook specs
 - a generated operation inventory loaded from Python-derived golden metadata
+- read-only Zoom Phone directory helpers for common migration consumers
 
 The public surface is intentionally idiomatic Go rather than a literal Python
 attribute-chain port. The migration keeps the Python semantics, schema rules,
 and operation inventory, while exposing them through stable Go constructors,
 typed operation metadata, and low-level validated request helpers.
+
+## Zoom Phone directory readers
+
+The generated SDK inventory already contains the current read-only Zoom Phone
+directory list operations used by directory-sync consumers:
+
+| Helper | Generated operation | Zoom API endpoint |
+| --- | --- | --- |
+| `client.PhoneDirectory().Users` | `phone.users.list` | `GET /phone/users` |
+| `client.PhoneDirectory().CommonAreas` | `phone.common_areas.list` | `GET /phone/common_areas` |
+| `client.PhoneDirectory().SharedLineGroups` | `phone.shared_line_groups.list` | `GET /phone/shared_line_groups` |
+| `client.PhoneDirectory().CallQueues` | `phone.call_queues.list` | `GET /phone/call_queues` |
+
+Each helper delegates to the generated operation and the shared SDK request
+runtime. OAuth, retry behavior, request URL construction, response validation,
+and `next_page_token` pagination stay inside this SDK. Consumers should not
+create app-local Zoom HTTP clients for these directory reads.
+
+The page-returning methods expose `[]SDKPage`:
+
+```go
+pages, err := client.PhoneDirectory().Users(ctx, zoomsdk.PhoneDirectoryListOptions{
+	PageSize:   100,
+	SiteID:     "site-id",
+	Department: "Technology",
+})
+if err != nil {
+	return err
+}
+for _, page := range pages {
+	for _, rawUser := range page.Items {
+		user := rawUser.(map[string]any)
+		_ = user["id"]
+	}
+}
+```
+
+The flattened helpers return all raw item objects from every page:
+
+```go
+items, err := client.PhoneDirectory().AllCommonAreas(ctx, zoomsdk.PhoneDirectoryListOptions{
+	PageSize:             100,
+	CommonAreaDeviceType: 2,
+})
+```
+
+`PhoneDirectoryListOptions` only sends filters supported by the target endpoint
+according to the bundled OpenAPI spec. For example, `Department` is sent for
+`Users` and `CallQueues`, while `CommonAreaDeviceType` is only sent for
+`CommonAreas`.
+
+The older `GET /phone/common_area_phones` common-area shape is not present in
+the current vendored Zoom OpenAPI inventory. `PhoneDirectory` therefore uses
+`GET /phone/common_areas` as the supported replacement. Code that needs to
+branch on this compatibility decision can call
+`client.PhoneDirectory().SupportsLegacyCommonAreaPhones()`, which returns
+`false` unless a future bundled inventory adds `GET /phone/common_area_phones`.
+
+Directory helpers return raw Zoom item payloads so application code can perform
+its own normalization and projection. Do not log raw provider payloads, request
+headers, bearer tokens, client secrets, or OAuth responses in helper examples or
+consumer code. The SDK logger records request metadata such as method, path,
+status, retry attempt, and request IDs; it does not intentionally log response
+bodies or Authorization header values.
 
 ## Vendored parity assets
 

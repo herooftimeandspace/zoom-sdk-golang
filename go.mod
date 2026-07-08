@@ -1,6 +1,6 @@
 module github.com/herooftimeandspace/zoom-sdk-golang
 
-go 1.26.1
+go 1.26.5
 
 tool golang.org/x/vuln/cmd/govulncheck
 

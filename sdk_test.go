@@ -71,6 +71,16 @@ func TestSDKDiscoveryHelpersReturnStableOperations(t *testing.T) {
 	if len(phoneOperations) != 1 || phoneOperations[0] != "phone.users.get" {
 		t.Fatalf("unexpected phone operations: %#v", phoneOperations)
 	}
+	allOperations := sdk.NamespaceOperations()
+	if strings.Join(allOperations, ",") != "phone.users.get,users.get,users.list" {
+		t.Fatalf("unexpected all operations: %#v", allOperations)
+	}
+	if namespaceHasPrefix([]string{"phone"}, []string{"phone", "users"}) {
+		t.Fatal("short namespace should not match a longer prefix")
+	}
+	if namespace, operation := splitOperationName("single"); len(namespace) != 0 || operation != "single" {
+		t.Fatalf("unexpected single operation split: %#v %q", namespace, operation)
+	}
 }
 
 func TestSDKOperationCallMapsParametersAndUsesDefaultAccountID(t *testing.T) {
@@ -93,6 +103,27 @@ func TestSDKOperationCallMapsParametersAndUsesDefaultAccountID(t *testing.T) {
 	}
 	if client.DefaultAccountID() != "default-acct" {
 		t.Fatalf("unexpected default account id: %s", client.DefaultAccountID())
+	}
+}
+
+func TestSDKOperationDescribeUsesSchemaMetadata(t *testing.T) {
+	_, operation, _ := buildSDKCallTestClient(t, `{"id":"widget-1"}`)
+	description := operation.Describe()
+	for _, want := range []string{
+		"Create widget",
+		"Operation ID: createWidget",
+		"HTTP: POST /accounts/{accountId}/widgets",
+		"Path parameters: account_id",
+		"Query parameters: include_inactive",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description missing %q: %s", want, description)
+		}
+	}
+
+	fallback := (&SDKOperation{HTTPMethod: "GET", Path: "/widgets", OperationID: "listWidgets"}).Describe()
+	if !strings.Contains(fallback, "GET /widgets (listWidgets)") {
+		t.Fatalf("expected debug fallback description, got %s", fallback)
 	}
 }
 
