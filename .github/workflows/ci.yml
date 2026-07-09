@@ -17,7 +17,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4  # TODO: pin to a specific SHA
+      - uses: actions/checkout@v7  # TODO: pin to a specific SHA
 
       - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
         with:
@@ -42,9 +42,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4  # TODO: pin to a specific SHA
+      - uses: actions/checkout@v7  # TODO: pin to a specific SHA
 
-      - uses: actions/checkout@v4  # TODO: pin to a specific SHA
+      - uses: actions/checkout@v7  # TODO: pin to a specific SHA
         with:
           repository: herooftimeandspace/zoom-sdk-python
           ref: dev
@@ -67,7 +67,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4  # TODO: pin to a specific SHA
+      - uses: actions/checkout@v7  # TODO: pin to a specific SHA
 
       - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
         with:
