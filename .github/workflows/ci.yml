@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to a specific SHA
 
-      - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
+      - uses: actions/setup-go@v6  # TODO: pin to a specific SHA
         with:
           go-version-file: go.mod
 
@@ -50,7 +50,7 @@ jobs:
           ref: dev
           path: zoom-sdk-python
 
-      - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
+      - uses: actions/setup-go@v6  # TODO: pin to a specific SHA
         with:
           go-version-file: go.mod
 
@@ -69,7 +69,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7  # TODO: pin to a specific SHA
 
-      - uses: actions/setup-go@v5  # TODO: pin to a specific SHA
+      - uses: actions/setup-go@v6  # TODO: pin to a specific SHA
         with:
           go-version-file: go.mod
 
