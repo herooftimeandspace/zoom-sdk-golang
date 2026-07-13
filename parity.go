@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-//go:embed internal/parity/golden/sdk_public_surface.json
+//go:embed internal/parity/golden/sdk_public_surface.json internal/parity/schemas
 var parityAssets embed.FS
 
 // GoldenPublicSurface loads the vendored SDK golden surface snapshot.
