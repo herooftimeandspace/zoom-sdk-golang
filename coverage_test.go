@@ -478,7 +478,7 @@ func TestRegistryLoadersAndLookupBranches(t *testing.T) {
 		},
 	})
 
-	loadedPaths, err := loadPathOperations(filepath.Join(endpointsDir, "Users.json"))
+	loadedPaths, err := loadPathOperations(os.DirFS(tmp), "endpoints/accounts/Users.json")
 	if err != nil || len(loadedPaths) != 1 {
 		t.Fatalf("loadPathOperations failed: %v %#v", err, loadedPaths)
 	}
@@ -486,7 +486,7 @@ func TestRegistryLoadersAndLookupBranches(t *testing.T) {
 		t.Fatalf("unexpected loaded path operation: %#v", loadedPaths[0])
 	}
 
-	loadedHooks, err := loadWebhookOperations(filepath.Join(webhooksDir, "Events.json"))
+	loadedHooks, err := loadWebhookOperations(os.DirFS(tmp), "webhooks/events/Events.json")
 	if err != nil || len(loadedHooks) != 1 {
 		t.Fatalf("loadWebhookOperations failed: %v %#v", err, loadedHooks)
 	}
@@ -535,14 +535,14 @@ func TestRegistryLoadersAndLookupBranches(t *testing.T) {
 		t.Fatalf("expected narrowed webhook validation to succeed: %v", err)
 	}
 
-	if _, err := loadJSON(filepath.Join(tmp, "missing.json")); err == nil {
+	if _, err := loadJSON(os.DirFS(tmp), "missing.json"); err == nil {
 		t.Fatal("expected missing JSON file to fail")
 	}
 	invalidJSON := filepath.Join(tmp, "invalid.json")
 	if err := os.WriteFile(invalidJSON, []byte("{"), 0o644); err != nil {
 		t.Fatalf("write invalid json: %v", err)
 	}
-	if _, err := loadJSON(invalidJSON); err == nil {
+	if _, err := loadJSON(os.DirFS(tmp), "invalid.json"); err == nil {
 		t.Fatal("expected invalid JSON payload to fail")
 	}
 
@@ -561,7 +561,7 @@ func TestRegistryLoadersAndLookupBranches(t *testing.T) {
 			},
 		},
 	})
-	emptyHooks, err := loadWebhookOperations(emptyWebhookSpec)
+	emptyHooks, err := loadWebhookOperations(os.DirFS(tmp), "webhooks/events/Empty.json")
 	if err != nil {
 		t.Fatalf("load empty webhook operations: %v", err)
 	}
@@ -583,7 +583,7 @@ func TestRegistryLoadersAndLookupBranches(t *testing.T) {
 			},
 		},
 	})
-	noSchemaHooks, err := loadWebhookOperations(noSchemaWebhookSpec)
+	noSchemaHooks, err := loadWebhookOperations(os.DirFS(tmp), "webhooks/events/NoSchema.json")
 	if err != nil {
 		t.Fatalf("load no-schema webhook operations: %v", err)
 	}
@@ -900,8 +900,8 @@ func TestConstructorAndRegistryFailureBranches(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	if _, err := NewSchemaRegistry(""); err == nil {
-		t.Fatal("expected invalid vendored endpoint schema to fail")
+	if _, err := NewSchemaRegistry(filepath.Join(tmp, "internal", "parity", "schemas")); err == nil {
+		t.Fatal("expected explicit invalid endpoint schema root to fail")
 	}
 
 	if err := os.Remove(filepath.Join(tmp, "internal", "parity", "schemas", "endpoints", "bad.json")); err != nil {
@@ -910,11 +910,11 @@ func TestConstructorAndRegistryFailureBranches(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmp, "internal", "parity", "schemas", "webhooks", "bad.json"), []byte("{"), 0o644); err != nil {
 		t.Fatalf("write bad webhook schema: %v", err)
 	}
-	if _, err := NewWebhookRegistry(""); err == nil {
-		t.Fatal("expected invalid vendored webhook schema to fail")
+	if _, err := NewWebhookRegistry(filepath.Join(tmp, "internal", "parity", "schemas")); err == nil {
+		t.Fatal("expected explicit invalid webhook schema root to fail")
 	}
-	if _, err := NewClient(DefaultSettings(), "token"); err == nil {
-		t.Fatal("expected new client to fail when vendored schemas are invalid")
+	if _, err := NewClient(DefaultSettings(), "token"); err != nil {
+		t.Fatalf("expected new client to use embedded schemas instead of cwd fixtures: %v", err)
 	}
 }
 
