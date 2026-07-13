@@ -15,7 +15,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: go run ./scripts/parity <sync|verify> [--check]")
+		return fmt.Errorf("usage: go run ./scripts/parity <sync|verify> [--check] [--python-root PATH]")
 	}
 
 	switch args[0] {
@@ -23,10 +23,11 @@ func run(args []string) error {
 		flags := flag.NewFlagSet("sync", flag.ContinueOnError)
 		flags.SetOutput(ioDiscard{})
 		checkOnly := flags.Bool("check", false, "report parity drift without modifying files")
+		pythonRoot := flags.String("python-root", "", "path to the zoom-sdk-python source checkout")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		return syncParityAssets("", *checkOnly)
+		return syncParityAssets("", *pythonRoot, *checkOnly)
 	case "verify":
 		return verifyVendoredParity("")
 	default:

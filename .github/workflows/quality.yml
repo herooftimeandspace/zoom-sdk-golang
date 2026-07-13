@@ -62,9 +62,7 @@ jobs:
           cache: false
 
       - name: Verify vendored parity assets are in sync
-        env:
-          ZOOM_SDK_PYTHON_ROOT: ${{ github.workspace }}/zoom-sdk-python
-        run: go run ./scripts/parity sync --check
+        run: go run ./scripts/parity sync --check --python-root "${{ github.workspace }}/zoom-sdk-python"
 
       - name: Run vendored parity checks
         run: go run ./scripts/parity verify

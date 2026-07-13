@@ -44,10 +44,10 @@ func TestSyncParityAssetsCopiesAndChecksVendoredAssets(t *testing.T) {
 		"chat.channels.get_account": map[string]any{},
 	})
 
-	if err := syncParityAssets(goRoot, false); err != nil {
+	if err := syncParityAssets(goRoot, "", false); err != nil {
 		t.Fatalf("sync parity assets: %v", err)
 	}
-	if err := syncParityAssets(goRoot, true); err != nil {
+	if err := syncParityAssets(goRoot, "", true); err != nil {
 		t.Fatalf("expected synced parity assets to pass check mode: %v", err)
 	}
 	if err := verifyVendoredParity(goRoot); err != nil {
@@ -87,7 +87,7 @@ func TestSyncParityAssetsCheckModeReportsDrift(t *testing.T) {
 		t.Fatalf("write golden: %v", err)
 	}
 
-	err := syncParityAssets(goRoot, true)
+	err := syncParityAssets(goRoot, "", true)
 	if err == nil || !strings.Contains(err.Error(), "Parity assets are out of sync:") {
 		t.Fatalf("expected drift error, got %v", err)
 	}
@@ -215,7 +215,7 @@ func TestParityPathAndVerificationErrorBranches(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	if _, err := parityPaths(goRoot); err == nil || !strings.Contains(err.Error(), "zoom-sdk-python source repo not found") {
+	if _, err := parityPaths(goRoot, ""); err == nil || !strings.Contains(err.Error(), "zoom-sdk-python source repo not found") {
 		t.Fatalf("expected missing python repo error, got %v", err)
 	}
 
@@ -241,9 +241,7 @@ func TestParityPathsUsesExplicitPythonRoot(t *testing.T) {
 	if err := os.MkdirAll(pythonRoot, 0o755); err != nil {
 		t.Fatalf("mkdir python root: %v", err)
 	}
-	t.Setenv("ZOOM_SDK_PYTHON_ROOT", pythonRoot)
-
-	paths, err := parityPaths(goRoot)
+	paths, err := parityPaths(goRoot, pythonRoot)
 	if err != nil {
 		t.Fatalf("parity paths: %v", err)
 	}
@@ -273,7 +271,7 @@ func TestSyncParityAssetsAndVerificationReadErrors(t *testing.T) {
 		t.Fatalf("write go.mod: %v", err)
 	}
 
-	if err := syncParityAssets(goRoot, false); err == nil {
+	if err := syncParityAssets(goRoot, "", false); err == nil {
 		t.Fatal("expected sync to fail when zoom-sdk-python is missing")
 	}
 	if err := verifyVendoredParity(goRoot); err == nil {
