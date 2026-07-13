@@ -1,0 +1,269 @@
+name: promotion
+
+on:
+  workflow_run:
+    workflows: ["quality"]
+    types: [completed]
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
+jobs:
+  promote-dev-to-staging:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Create or refresh dev to staging promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin staging
+          resolved_label="$(go run scripts/release_tools.go resolve-promotion-semver --repo "${GH_REPO}" --sha "${GH_SHA}" --base-ref dev)"
+          existing_pr="$(gh pr list --repo "${GH_REPO}" --base staging --head dev --state open --json number --jq '.[0].number')"
+          title="Promote dev to staging"
+          body="$(printf '%s\n' \
+            'Automated promotion PR from dev to staging.' \
+            '' \
+            "Source commit: ${GH_SHA}" \
+            "Source workflow: ${GH_URL}" \
+            '' \
+            'The required unit, parity, and security checks come from the authoritative dev push for this exact commit.' \
+            'This workflow uses the repository GITHUB_TOKEN; no personal access token is required.')"
+
+          if [ -n "${existing_pr}" ]; then
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --title "${title}" --body "${body}"
+            for label in semver:patch semver:minor semver:major; do
+              if [ "${label}" != "${resolved_label}" ]; then
+                gh pr edit "${existing_pr}" --repo "${GH_REPO}" --remove-label "${label}" >/dev/null 2>&1 || true
+              fi
+            done
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --add-label "${resolved_label}"
+            exit 0
+          fi
+
+          if [ "$(git rev-list --count origin/staging..HEAD)" = "0" ]; then
+            echo "No commits between staging and dev; skipping promotion PR."
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "${GH_REPO}" \
+            --base staging \
+            --head dev \
+            --title "${title}" \
+            --body "${body}" \
+            --label "${resolved_label}"
+
+  promote-staging-to-main:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Python source of truth
+        uses: actions/checkout@v7
+        with:
+          repository: herooftimeandspace/zoom-sdk-python
+          ref: dev
+          path: zoom-sdk-python
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Create or refresh staging to main promotion PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_URL: ${{ github.event.workflow_run.html_url }}
+          GH_PROMOTION_REF: promote/staging-to-main
+        run: |
+          set -euo pipefail
+
+          git fetch origin main staging
+          resolved_label="$(go run scripts/release_tools.go resolve-promotion-semver --repo "${GH_REPO}" --sha "${GH_SHA}" --base-ref staging)"
+
+          if [ "$(git rev-list --count origin/main.."${GH_SHA}")" = "0" ]; then
+            echo "No commits between main and staging; skipping promotion PR."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${GH_PROMOTION_REF}" origin/main
+          git merge --no-ff --no-edit "${GH_SHA}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git" \
+            "HEAD:refs/heads/${GH_PROMOTION_REF}" \
+            --force
+
+          existing_pr="$(gh pr list --repo "${GH_REPO}" --base main --head "${GH_PROMOTION_REF}" --state open --json number --jq '.[0].number')"
+          title="Promote staging to main"
+          body="$(printf '%s\n' \
+            'Automated promotion PR from staging to main.' \
+            '' \
+            "Source commit: ${GH_SHA}" \
+            "Source workflow: ${GH_URL}" \
+            '' \
+            'This PR must carry exactly one release label: semver:patch, semver:minor, or semver:major.' \
+            'After merge, the release workflow creates the next semantic-version tag and GitHub Release.' \
+            'Required checks are reported by this promotion workflow on the exact prepared merge head.' \
+            'This workflow uses the repository GITHUB_TOKEN; no personal access token is required.')"
+
+          if [ -n "${existing_pr}" ]; then
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --title "${title}" --body "${body}"
+            for label in semver:patch semver:minor semver:major; do
+              if [ "${label}" != "${resolved_label}" ]; then
+                gh pr edit "${existing_pr}" --repo "${GH_REPO}" --remove-label "${label}" >/dev/null 2>&1 || true
+              fi
+            done
+            gh pr edit "${existing_pr}" --repo "${GH_REPO}" --add-label "${resolved_label}"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "${GH_REPO}" \
+            --base main \
+            --head "${GH_PROMOTION_REF}" \
+            --title "${title}" \
+            --body "${body}" \
+            --label "${resolved_label}"
+
+      - name: Run and report promotion checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GH_PROMOTION_REF: promote/staging-to-main
+          ZOOM_SDK_PYTHON_ROOT: ${{ github.workspace }}/zoom-sdk-python
+        run: |
+          set -euo pipefail
+
+          promotion_pr="$(gh pr list --repo "${GH_REPO}" --base main --head "${GH_PROMOTION_REF}" --state open --json number --jq '.[0].number')"
+          if [ -z "${promotion_pr}" ]; then
+            echo "No open staging to main promotion PR found; skipping promotion-owned checks."
+            exit 0
+          fi
+          export promotion_pr
+
+          git fetch origin main staging "${GH_PROMOTION_REF}"
+          git checkout "origin/${GH_PROMOTION_REF}"
+          promotion_sha="$(git rev-parse HEAD)"
+          echo "Reporting promotion-owned checks for PR #${promotion_pr} at ${promotion_sha}."
+
+          run_reported_check() {
+            local name="$1"
+            local script="$2"
+            local log_file
+            local check_id
+            local started_at
+            local completed_at
+            local conclusion="success"
+
+            log_file="$(mktemp)"
+            started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            check_id="$(gh api \
+              --method POST \
+              "repos/${GH_REPO}/check-runs" \
+              -f "name=${name}" \
+              -f "head_sha=${promotion_sha}" \
+              -f "status=in_progress" \
+              -f "started_at=${started_at}" \
+              --jq '.id')"
+
+            if ! bash -eo pipefail -c "${script}" >"${log_file}" 2>&1; then
+              conclusion="failure"
+            fi
+
+            completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            gh api \
+              --method PATCH \
+              "repos/${GH_REPO}/check-runs/${check_id}" \
+              -f "status=completed" \
+              -f "conclusion=${conclusion}" \
+              -f "completed_at=${completed_at}" \
+              -f "output[title]=${name}" \
+              -f "output[summary]=Promotion workflow reported ${name} with conclusion ${conclusion}." \
+              -f "output[text]=$(tail -c 60000 "${log_file}")" \
+              >/dev/null
+
+            cat "${log_file}"
+            rm -f "${log_file}"
+            [ "${conclusion}" = "success" ]
+          }
+
+          unit_script='
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+          packages="$(go list ./... | grep -Ev "^github.com/herooftimeandspace/zoom-sdk-golang/scripts($|/parity$)")"
+          go test ${packages} -coverprofile=coverage.out -covermode=atomic
+          coverage="$(go tool cover -func=coverage.out | awk "/total:/ {print substr(\$3, 1, length(\$3)-1)}")"
+          awk -v coverage="${coverage}" "BEGIN { if ((coverage + 0) < 95) exit 1 }"
+          for package in $(go list ./...); do go doc "${package}" >/dev/null; done
+          '
+
+          parity_script='
+          set -euo pipefail
+          go run ./scripts/parity sync --check
+          go run ./scripts/parity verify
+          '
+
+          security_script='
+          set -euo pipefail
+          go tool govulncheck ./...
+          '
+
+          release_prep_script='
+          set -euo pipefail
+          labels="$(gh pr view "${promotion_pr}" --repo "${GH_REPO}" --json labels --jq ".labels[].name")"
+          semver_labels="$(printf "%s\n" "${labels}" | grep "^semver:" || true)"
+          semver_count="$(printf "%s\n" "${semver_labels}" | sed "/^$/d" | wc -l | tr -d " ")"
+          if [ "${semver_count}" != "1" ]; then
+            echo "Expected exactly one semver label on PR #${promotion_pr}; found ${semver_count}."
+            exit 1
+          fi
+          git fetch origin main staging
+          git merge-base --is-ancestor origin/staging HEAD
+          git merge-base --is-ancestor origin/main HEAD
+          part="${semver_labels#semver:}"
+          current_tag="$(git describe --tags --match "v[0-9]*.[0-9]*.[0-9]*" --abbrev=0 origin/main 2>/dev/null || true)"
+          current_version="${current_tag#v}"
+          if [ -z "${current_version}" ]; then current_version="0.0.0"; fi
+          desired_version="$(go run scripts/release_tools.go bump --part "${part}" --current-version "${current_version}")"
+          echo "Promotion branch is prepared for v${desired_version}."
+          '
+
+          failures=0
+          run_reported_check unit "${unit_script}" || failures=1
+          run_reported_check parity "${parity_script}" || failures=1
+          run_reported_check security "${security_script}" || failures=1
+          run_reported_check release-prep "${release_prep_script}" || failures=1
+
+          if [ "${failures}" != "0" ]; then
+            echo "One or more promotion-owned checks failed."
+            exit 1
+          fi

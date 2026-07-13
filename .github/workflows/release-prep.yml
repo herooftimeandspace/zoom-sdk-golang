@@ -1,0 +1,61 @@
+name: release-prep
+
+on:
+  pull_request:
+    branches: ["main"]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-prep:
+    name: release-prep
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'promote/staging-to-main'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout promotion head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify prepared promotion branch
+        run: |
+          set -euo pipefail
+
+          labels="$(gh pr view "${GH_PR_NUMBER}" --repo "${GH_REPO}" --json labels --jq '.labels[].name')"
+          semver_labels="$(printf '%s\n' "${labels}" | grep '^semver:' || true)"
+          semver_count="$(printf '%s\n' "${semver_labels}" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "${semver_count}" != "1" ]; then
+            echo "Expected exactly one semver label on PR #${GH_PR_NUMBER}; found ${semver_count}."
+            exit 1
+          fi
+
+          git fetch origin main staging
+          if ! git merge-base --is-ancestor origin/staging HEAD; then
+            echo "Prepared promotion head does not contain the latest staging tip."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "Prepared promotion head does not contain the latest main tip."
+            exit 1
+          fi
+
+          part="${semver_labels#semver:}"
+          current_tag="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 origin/main 2>/dev/null || true)"
+          current_version="${current_tag#v}"
+          if [ -z "${current_version}" ]; then current_version="0.0.0"; fi
+          desired_version="$(go run scripts/release_tools.go bump --part "${part}" --current-version "${current_version}")"
+          echo "Promotion branch is fully prepared for v${desired_version}."
