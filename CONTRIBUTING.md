@@ -65,7 +65,9 @@ Promotion pull requests carry exactly one of these labels:
 - `semver:minor` for backward-compatible additions to the public Go API.
 - `semver:major` for breaking changes to exported types, functions, methods, behavior contracts, or supported configuration.
 
-The automation copies a semver label from the source pull request when it can associate one with the promoted commit. If no source label exists, it safely defaults to `semver:patch`. Multiple semver labels are treated as an error rather than choosing one implicitly.
+The `dev -> staging` automation copies the semver label from the source pull request associated with the promoted `dev` commit. The `staging -> main` automation examines every commit in the complete unpromoted `main..staging` range, resolves the source pull requests represented by those commits, and applies the highest impact it finds using `semver:major > semver:minor > semver:patch`. This range is recalculated whenever the open promotion pull request is refreshed, so later patch or minor work cannot downgrade an earlier major or minor change that has not reached `main`.
+
+If no source label exists, automation safely defaults that source work to `semver:patch`. A source pull request with multiple distinct semver labels is treated as an error rather than choosing one implicitly. The refreshed promotion pull request is normalized back to exactly one aggregated semver label.
 
 Go modules are versioned by Git tags. This repository therefore has no version file to rewrite during release preparation. `release-prep` calculates the next version from the latest `vMAJOR.MINOR.PATCH` tag on `main` and validates the promotion head and label before merge.
 

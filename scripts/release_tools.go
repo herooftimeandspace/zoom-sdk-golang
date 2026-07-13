@@ -17,6 +17,7 @@ import (
 )
 
 var validSemverLabels = []string{"semver:patch", "semver:minor", "semver:major"}
+var semverLabelImpact = map[string]int{"semver:patch": 0, "semver:minor": 1, "semver:major": 2}
 var versionPattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 
 // associatedPull contains only the GitHub pull-request fields needed to carry
@@ -34,7 +35,7 @@ type associatedPull struct {
 // main dispatches the release helper subcommand requested by a workflow.
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: go run scripts/release_tools.go <bump|resolve-promotion-semver> [flags]")
+		fatal("usage: go run scripts/release_tools.go <bump|resolve-promotion-semver|resolve-promotion-range-semver> [flags]")
 	}
 
 	switch os.Args[1] {
@@ -42,9 +43,55 @@ func main() {
 		runBump(os.Args[2:])
 	case "resolve-promotion-semver":
 		runResolvePromotionSemver(os.Args[2:])
+	case "resolve-promotion-range-semver":
+		runResolvePromotionRangeSemver(os.Args[2:])
 	default:
 		fatal("unsupported release tool command %q", os.Args[1])
 	}
+}
+
+// runResolvePromotionRangeSemver resolves the highest release impact across
+// every source pull request represented by commits in base..head. Unlike the
+// single-commit resolver used for dev-to-staging promotion, this range-based
+// command preserves an earlier minor or major impact when later lower-impact
+// work refreshes an open staging-to-main promotion pull request.
+func runResolvePromotionRangeSemver(args []string) {
+	flags := flag.NewFlagSet("resolve-promotion-range-semver", flag.ExitOnError)
+	repo := flags.String("repo", "", "GitHub owner/repository")
+	base := flags.String("base", "", "base Git revision excluded from the promotion range")
+	head := flags.String("head", "", "head Git revision included in the promotion range")
+	sourceBaseRef := flags.String("source-base-ref", "", "preferred base branch for associated source pull requests")
+	defaultLabel := flags.String("default-label", "semver:patch", "default semver label")
+	if err := flags.Parse(args); err != nil {
+		fatal("parse resolve-promotion-range-semver flags: %v", err)
+	}
+	if *repo == "" || *base == "" || *head == "" {
+		fatal("--repo, --base, and --head are required")
+	}
+
+	commits, err := commitsBetween(*base, *head)
+	if err != nil {
+		fatal("resolve promotion commit range %s..%s: %v", *base, *head, err)
+	}
+	commitPulls := make([][]associatedPull, 0, len(commits))
+	for _, commit := range commits {
+		pulls, err := associatedPulls(*repo, commit)
+		if err != nil {
+			fatal("resolve pull requests associated with %s: %v", commit, err)
+		}
+		commitPulls = append(commitPulls, pulls)
+	}
+
+	label, prNumbers, err := resolvePromotionRangeSemverLabel(commitPulls, *sourceBaseRef, *defaultLabel)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if len(prNumbers) == 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "No associated source pull requests found in %s..%s; defaulting to %s.\n", *base, *head, label)
+	} else {
+		_, _ = fmt.Fprintf(os.Stderr, "Resolved %s across source PRs %v in %s..%s.\n", label, prNumbers, *base, *head)
+	}
+	fmt.Println(label)
 }
 
 // runBump parses the bump command and prints the next semantic version.
@@ -120,6 +167,24 @@ func associatedPulls(repo string, sha string) ([]associatedPull, error) {
 	return pulls, nil
 }
 
+// commitsBetween returns commits reachable from head but not base in stable
+// oldest-to-newest order. Arguments are passed directly to Git, never through
+// a shell, so workflow-provided revision names cannot inject commands.
+func commitsBetween(base string, head string) ([]string, error) {
+	cmd := exec.Command("git", "rev-list", "--reverse", fmt.Sprintf("%s..%s", base, head))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		return nil, errors.New(detail)
+	}
+	return strings.Fields(string(output)), nil
+}
+
 // resolvePromotionSemverLabel prefers the pull request targeting baseRef and
 // returns the release label that should be copied to the promotion pull request.
 func resolvePromotionSemverLabel(pulls []associatedPull, baseRef string, defaultLabel string) (int, string, error) {
@@ -127,18 +192,7 @@ func resolvePromotionSemverLabel(pulls []associatedPull, baseRef string, default
 		return 0, "", fmt.Errorf("unsupported default semver label %q", defaultLabel)
 	}
 
-	var selected *associatedPull
-	if baseRef != "" {
-		for i := range pulls {
-			if pulls[i].Base.Ref == baseRef {
-				selected = &pulls[i]
-				break
-			}
-		}
-	}
-	if selected == nil && len(pulls) > 0 {
-		selected = &pulls[0]
-	}
+	selected := preferredAssociatedPull(pulls, baseRef)
 	if selected == nil {
 		return 0, defaultLabel, nil
 	}
@@ -152,6 +206,59 @@ func resolvePromotionSemverLabel(pulls []associatedPull, baseRef string, default
 		return 0, "", err
 	}
 	return selected.Number, resolved, nil
+}
+
+// resolvePromotionRangeSemverLabel selects one source pull request per commit,
+// deduplicates pull requests that are associated with multiple commits, and
+// returns the label with the greatest semantic-version impact. Each source PR
+// must still carry at most one semver label; ambiguous labeling fails closed.
+func resolvePromotionRangeSemverLabel(commitPulls [][]associatedPull, sourceBaseRef string, defaultLabel string) (string, []int, error) {
+	if !slices.Contains(validSemverLabels, defaultLabel) {
+		return "", nil, fmt.Errorf("unsupported default semver label %q", defaultLabel)
+	}
+
+	resolved := defaultLabel
+	seenPulls := make(map[int]bool)
+	prNumbers := make([]int, 0)
+	for _, pulls := range commitPulls {
+		selected := preferredAssociatedPull(pulls, sourceBaseRef)
+		if selected == nil || seenPulls[selected.Number] {
+			continue
+		}
+		seenPulls[selected.Number] = true
+		prNumbers = append(prNumbers, selected.Number)
+
+		labels := make([]string, 0, len(selected.Labels))
+		for _, label := range selected.Labels {
+			labels = append(labels, label.Name)
+		}
+		label, err := selectSemverLabel(labels, defaultLabel)
+		if err != nil {
+			return "", nil, fmt.Errorf("resolve semver label for PR #%d: %w", selected.Number, err)
+		}
+		if semverLabelImpact[label] > semverLabelImpact[resolved] {
+			resolved = label
+		}
+	}
+	return resolved, prNumbers, nil
+}
+
+// preferredAssociatedPull chooses the source PR targeting baseRef when GitHub
+// associates a commit with both its original PR and a later promotion PR. If
+// no preferred-base PR exists, the first GitHub association is retained for
+// compatibility with the existing single-commit resolver.
+func preferredAssociatedPull(pulls []associatedPull, baseRef string) *associatedPull {
+	if baseRef != "" {
+		for i := range pulls {
+			if pulls[i].Base.Ref == baseRef {
+				return &pulls[i]
+			}
+		}
+	}
+	if len(pulls) > 0 {
+		return &pulls[0]
+	}
+	return nil
 }
 
 // selectSemverLabel enforces the invariant that a source pull request carries
