@@ -183,6 +183,7 @@ This repository uses the same protected promotion chain as the related SDK repos
 - successful `dev` checks create or refresh a `dev -> staging` promotion pull request
 - successful `staging` checks create or refresh a prepared `staging -> main` promotion pull request
 - promotion pull requests carry exactly one of `semver:patch`, `semver:minor`, or `semver:major`
+- staging-to-main refreshes preserve the highest semver impact across every source change still pending in the complete `main..staging` range
 - merging the prepared promotion into `main` creates the next `vMAJOR.MINOR.PATCH` tag and GitHub Release
 
 The deterministic required checks are `unit`, `parity`, and `security`. The final promotion also requires `release-prep`, which confirms that the exact merge head contains the current `main` and `staging` tips and has one unambiguous release label.
