@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -97,4 +98,113 @@ func TestResolvePromotionSemverLabel(t *testing.T) {
 	if number != 10 || label != "semver:minor" {
 		t.Fatalf("resolvePromotionSemverLabel() = (%d, %q), want (10, %q)", number, label, "semver:minor")
 	}
+}
+
+// TestResolvePromotionRangeSemverLabel verifies that a staging promotion uses
+// the highest-impact label from every source pull request in the unpromoted
+// commit range. Repeated pull requests model the same source PR being
+// associated with more than one commit and must not change the result.
+func TestResolvePromotionRangeSemverLabel(t *testing.T) {
+	tests := []struct {
+		name        string
+		commitPulls [][]associatedPull
+		want        string
+		wantPRs     []int
+		wantErr     bool
+	}{
+		{
+			name: "patch only",
+			commitPulls: [][]associatedPull{
+				{testAssociatedPull(20, "dev", "semver:patch")},
+			},
+			want:    "semver:patch",
+			wantPRs: []int{20},
+		},
+		{
+			name: "minor outranks later patch",
+			commitPulls: [][]associatedPull{
+				{testAssociatedPull(21, "dev", "semver:minor")},
+				{testAssociatedPull(22, "dev", "semver:patch")},
+			},
+			want:    "semver:minor",
+			wantPRs: []int{21, 22},
+		},
+		{
+			name: "major outranks later minor and patch on refresh",
+			commitPulls: [][]associatedPull{
+				{testAssociatedPull(23, "dev", "semver:major")},
+				{testAssociatedPull(23, "dev", "semver:major")},
+				{testAssociatedPull(24, "dev", "semver:minor")},
+				{testAssociatedPull(25, "dev", "semver:patch")},
+			},
+			want:    "semver:major",
+			wantPRs: []int{23, 24, 25},
+		},
+		{
+			name: "unlabeled source defaults to patch",
+			commitPulls: [][]associatedPull{
+				{testAssociatedPull(26, "dev")},
+			},
+			want:    "semver:patch",
+			wantPRs: []int{26},
+		},
+		{
+			name:        "unassociated commits default to patch",
+			commitPulls: [][]associatedPull{{}},
+			want:        "semver:patch",
+			wantPRs:     []int{},
+		},
+		{
+			name: "preferred source base wins",
+			commitPulls: [][]associatedPull{
+				{
+					testAssociatedPull(27, "staging", "semver:patch"),
+					testAssociatedPull(28, "dev", "semver:minor"),
+				},
+			},
+			want:    "semver:minor",
+			wantPRs: []int{28},
+		},
+		{
+			name: "ambiguous source labels fail closed",
+			commitPulls: [][]associatedPull{
+				{testAssociatedPull(29, "dev", "semver:patch", "semver:minor")},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, prs, err := resolvePromotionRangeSemverLabel(test.commitPulls, "dev", "semver:patch")
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("resolvePromotionRangeSemverLabel() expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolvePromotionRangeSemverLabel() unexpected error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("resolvePromotionRangeSemverLabel() label = %q, want %q", got, test.want)
+			}
+			if !slices.Equal(prs, test.wantPRs) {
+				t.Fatalf("resolvePromotionRangeSemverLabel() PRs = %v, want %v", prs, test.wantPRs)
+			}
+		})
+	}
+}
+
+// testAssociatedPull builds the minimal GitHub response shape needed by the
+// release-label resolvers while keeping individual test cases readable.
+func testAssociatedPull(number int, base string, labels ...string) associatedPull {
+	pull := associatedPull{Number: number}
+	pull.Base.Ref = base
+	for _, label := range labels {
+		pull.Labels = append(pull.Labels, struct {
+			Name string `json:"name"`
+		}{Name: label})
+	}
+	return pull
 }
