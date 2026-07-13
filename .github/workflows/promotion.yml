@@ -106,7 +106,11 @@ jobs:
           set -euo pipefail
 
           git fetch origin main staging
-          resolved_label="$(go run scripts/release_tools.go resolve-promotion-semver --repo "${GH_REPO}" --sha "${GH_SHA}" --base-ref staging)"
+          resolved_label="$(go run scripts/release_tools.go resolve-promotion-range-semver \
+            --repo "${GH_REPO}" \
+            --base origin/main \
+            --head "${GH_SHA}" \
+            --source-base-ref dev)"
 
           if [ "$(git rev-list --count origin/main.."${GH_SHA}")" = "0" ]; then
             echo "No commits between main and staging; skipping promotion PR."
