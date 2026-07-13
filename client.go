@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const maxResponseBodyBytes int64 = 4 << 20
+
 // Client executes validated Zoom API requests and exposes the generated SDK.
 type Client struct {
 	settings        Settings
@@ -92,7 +94,7 @@ func (c *Client) Request(ctx context.Context, method string, path string, option
 	if err != nil {
 		return nil, err
 	}
-	baseURL := c.schemaRegistry.BaseURLForRequest(method, actualPath, c.settings.BaseURL)
+	baseURL := c.baseURLForRequest(method, actualPath)
 	requestURL, err := buildURL(baseURL, actualPath, options.Query)
 	if err != nil {
 		return nil, err
@@ -161,6 +163,91 @@ func (c *Client) Request(ctx context.Context, method string, path string, option
 	return nil, lastErr
 }
 
+// RequestRawBody executes one authenticated request and returns the bounded
+// response body without schema validation. This is intended for callers that
+// need SDK-owned auth, retries, and URL construction but must apply their own
+// compatibility decoder before accepting a provider payload.
+func (c *Client) RequestRawBody(ctx context.Context, method string, path string, options RequestOptions) ([]byte, error) {
+	actualPath, err := renderPath(path, options.PathParams)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := c.baseURLForRequest(method, actualPath)
+	requestURL, err := buildURL(baseURL, actualPath, options.Query)
+	if err != nil {
+		return nil, err
+	}
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = time.Duration(c.settings.TimeoutSeconds * float64(time.Second))
+	}
+	headers, err := c.buildHeaders(ctx, options.Headers)
+	if err != nil {
+		return nil, err
+	}
+
+	var bodyBytes []byte
+	if options.JSONBody != nil {
+		bodyBytes, err = json.Marshal(options.JSONBody)
+		if err != nil {
+			return nil, err
+		}
+		headers["Content-Type"] = "application/json"
+	}
+
+	normalizedMethod := strings.ToUpper(method)
+	var lastErr error
+	for attempt := 0; attempt <= c.settings.MaxRetries; attempt++ {
+		requestCtx, cancel := context.WithTimeout(ctx, timeout)
+		request, reqErr := http.NewRequestWithContext(requestCtx, normalizedMethod, requestURL, bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			cancel()
+			return nil, reqErr
+		}
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		startedAt := time.Now()
+		c.logger.Log("INFO", "Sending Zoom API request.", map[string]any{
+			"event":         "request_attempt",
+			"method":        normalizedMethod,
+			"url":           requestURL,
+			"path":          actualPath,
+			"retry_attempt": attempt,
+		})
+		response, reqErr := c.httpClient.Do(request)
+		cancel()
+		if reqErr != nil {
+			lastErr = reqErr
+			if attempt < c.settings.MaxRetries && isRetriableMethod(normalizedMethod) {
+				c.logRetry(normalizedMethod, requestURL, actualPath, attempt+1, reqErr.Error(), 0)
+				time.Sleep(c.calculateBackoff(attempt))
+				continue
+			}
+			return nil, reqErr
+		}
+		payload, parseErr := c.handleRawBodyResponse(normalizedMethod, actualPath, requestURL, response, startedAt)
+		if parseErr == nil {
+			return payload, nil
+		}
+		lastErr = parseErr
+		if attempt < c.settings.MaxRetries && isRetriableStatus(response.StatusCode) && isRetriableMethod(normalizedMethod) {
+			c.logRetry(normalizedMethod, requestURL, actualPath, attempt+1, fmt.Sprintf("HTTP %d", response.StatusCode), response.StatusCode)
+			time.Sleep(c.calculateBackoff(attempt))
+			continue
+		}
+		return nil, parseErr
+	}
+	return nil, lastErr
+}
+
+func (c *Client) baseURLForRequest(method string, actualPath string) string {
+	if c.settings.BaseURL != DefaultSettings().BaseURL {
+		return c.settings.BaseURL
+	}
+	return c.schemaRegistry.BaseURLForRequest(method, actualPath, c.settings.BaseURL)
+}
+
 // ValidateWebhook validates a webhook payload.
 func (c *Client) ValidateWebhook(eventName string, payload any, schemaName string, operationID string) error {
 	return c.webhookRegistry.ValidateWebhook(eventName, payload, schemaName, operationID)
@@ -202,7 +289,7 @@ func (c *Client) handleResponse(method string, actualPath string, requestURL str
 	if response.StatusCode == http.StatusNoContent {
 		return nil, c.schemaRegistry.ValidateResponse(method, actualPath, response.StatusCode, nil)
 	}
-	body, err := io.ReadAll(response.Body)
+	body, err := readBoundedResponseBody(response.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +322,39 @@ func (c *Client) handleResponse(method string, actualPath string, requestURL str
 		return nil, err
 	}
 	return payload, nil
+}
+
+func (c *Client) handleRawBodyResponse(method string, actualPath string, requestURL string, response *http.Response, startedAt time.Time) ([]byte, error) {
+	defer response.Body.Close()
+	c.logger.Log("INFO", "Received Zoom API response.", map[string]any{
+		"event":       "response_received",
+		"method":      method,
+		"url":         requestURL,
+		"path":        actualPath,
+		"status_code": response.StatusCode,
+		"duration_ms": time.Since(startedAt).Milliseconds(),
+		"request_id":  response.Header.Get("x-request-id"),
+		"trace_id":    response.Header.Get("x-zm-trackingid"),
+	})
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return nil, fmt.Errorf("request failed with status %d", response.StatusCode)
+	}
+	if response.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	return readBoundedResponseBody(response.Body)
+}
+
+func readBoundedResponseBody(body io.Reader) ([]byte, error) {
+	limited := io.LimitReader(body, maxResponseBodyBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxResponseBodyBytes {
+		return nil, fmt.Errorf("response body exceeds %d byte limit", maxResponseBodyBytes)
+	}
+	return data, nil
 }
 
 func (c *Client) logRetry(method string, requestURL string, actualPath string, retryAttempt int, reason string, statusCode int) {

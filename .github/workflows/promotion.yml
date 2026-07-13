@@ -158,7 +158,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           GH_PROMOTION_REF: promote/staging-to-main
-          ZOOM_SDK_PYTHON_ROOT: ${{ github.workspace }}/zoom-sdk-python
         run: |
           set -euo pipefail
 
@@ -228,7 +227,7 @@ jobs:
 
           parity_script='
           set -euo pipefail
-          go run ./scripts/parity sync --check
+          go run ./scripts/parity sync --check --python-root "${GITHUB_WORKSPACE}/zoom-sdk-python"
           go run ./scripts/parity verify
           '
 
