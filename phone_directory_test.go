@@ -16,57 +16,6 @@ func TestPhoneDirectoryPaginatesSupportedReaders(t *testing.T) {
 	directory := client.PhoneDirectory()
 	ctx := context.Background()
 
-	tests := []struct {
-		name       string
-		path       string
-		itemKey    string
-		readPages  func(context.Context, PhoneDirectoryListOptions) ([]SDKPage, error)
-		readAll    func(context.Context, PhoneDirectoryListOptions) ([]any, error)
-		wantQuery  map[string]string
-		omitQuery  []string
-		firstLabel string
-	}{
-		{
-			name:       "users",
-			path:       "/v2/phone/users",
-			itemKey:    "users",
-			readPages:  directory.Users,
-			readAll:    directory.AllUsers,
-			wantQuery:  map[string]string{"page_size": "2", "site_id": "site-1", "calling_type": "100", "status": "activate", "department": "Technology", "cost_center": "IT", "keyword": "front"},
-			firstLabel: "users-1",
-		},
-		{
-			name:       "common areas",
-			path:       "/v2/phone/common_areas",
-			itemKey:    "common_areas",
-			readPages:  directory.CommonAreas,
-			readAll:    directory.AllCommonAreas,
-			wantQuery:  map[string]string{"page_size": "2", "site_id": "site-1", "calling_type": "100", "common_area_device_type": "2"},
-			omitQuery:  []string{"status", "department", "cost_center", "keyword"},
-			firstLabel: "common_areas-1",
-		},
-		{
-			name:       "shared line groups",
-			path:       "/v2/phone/shared_line_groups",
-			itemKey:    "shared_line_groups",
-			readPages:  directory.SharedLineGroups,
-			readAll:    directory.AllSharedLineGroups,
-			wantQuery:  map[string]string{"page_size": "2"},
-			omitQuery:  []string{"site_id", "calling_type", "status", "department", "cost_center", "keyword", "common_area_device_type"},
-			firstLabel: "shared_line_groups-1",
-		},
-		{
-			name:       "call queues",
-			path:       "/v2/phone/call_queues",
-			itemKey:    "call_queues",
-			readPages:  directory.CallQueues,
-			readAll:    directory.AllCallQueues,
-			wantQuery:  map[string]string{"page_size": "2", "site_id": "site-1", "department": "Technology", "cost_center": "IT"},
-			omitQuery:  []string{"calling_type", "status", "keyword", "common_area_device_type"},
-			firstLabel: "call_queues-1",
-		},
-	}
-
 	options := PhoneDirectoryListOptions{
 		PageSize:             2,
 		SiteID:               "site-1",
@@ -78,9 +27,11 @@ func TestPhoneDirectoryPaginatesSupportedReaders(t *testing.T) {
 		CommonAreaDeviceType: 2,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pages, err := tt.readPages(ctx, options)
+	for _, id := range phoneDirectoryReaderIDs {
+		descriptor := requirePhoneDirectoryReader(t, id)
+		t.Run(string(id), func(t *testing.T) {
+			readPages, readAll := phoneDirectoryPublicReaders(directory, id)
+			pages, err := readPages(ctx, options)
 			if err != nil {
 				t.Fatalf("read pages: %v", err)
 			}
@@ -94,11 +45,11 @@ func TestPhoneDirectoryPaginatesSupportedReaders(t *testing.T) {
 				t.Fatalf("unexpected page items: %#v %#v", pages[0].Items, pages[1].Items)
 			}
 			first := pages[0].Items[0].(map[string]any)
-			if first["id"] != tt.firstLabel {
+			if first["id"] != descriptor.itemKey+"-1" {
 				t.Fatalf("unexpected first item: %#v", first)
 			}
 
-			items, err := tt.readAll(ctx, options)
+			items, err := readAll(ctx, options)
 			if err != nil {
 				t.Fatalf("read all: %v", err)
 			}
@@ -106,8 +57,32 @@ func TestPhoneDirectoryPaginatesSupportedReaders(t *testing.T) {
 				t.Fatalf("expected three flattened items, got %d", len(items))
 			}
 
-			assertPhoneDirectoryRequests(t, client, tt.path, tt.itemKey, tt.wantQuery, tt.omitQuery)
+			assertPhoneDirectoryRequests(t, client, descriptor, options)
 		})
+	}
+}
+
+func TestPhoneDirectoryDescriptorsMatchGeneratedInventory(t *testing.T) {
+	directory := buildPhoneDirectoryTestClient(t).PhoneDirectory()
+	if len(phoneDirectoryReaderDescriptors) != len(phoneDirectoryReaderIDs) {
+		t.Fatalf("descriptor count %d does not match public reader count %d", len(phoneDirectoryReaderDescriptors), len(phoneDirectoryReaderIDs))
+	}
+	for _, id := range phoneDirectoryReaderIDs {
+		descriptor := requirePhoneDirectoryReader(t, id)
+		operation, err := directory.operation(descriptor.operationName)
+		if err != nil {
+			t.Fatalf("%s operation: %v", id, err)
+		}
+		if operation.HTTPMethod != http.MethodGet || operation.Path != descriptor.path {
+			t.Fatalf("%s descriptor route %s %s does not match inventory %s %s", id, http.MethodGet, descriptor.path, operation.HTTPMethod, operation.Path)
+		}
+		wantQuery := append([]string{}, descriptor.allowedQuery...)
+		gotQuery := append([]string{}, operation.QueryParameters...)
+		sort.Strings(wantQuery)
+		sort.Strings(gotQuery)
+		if strings.Join(gotQuery, ",") != strings.Join(wantQuery, ",") {
+			t.Fatalf("%s descriptor query fields %v do not match inventory %v", id, wantQuery, gotQuery)
+		}
 	}
 }
 
@@ -116,13 +91,15 @@ func TestPhoneDirectoryDocumentsLegacyCommonAreaPhonesDecision(t *testing.T) {
 	if directory.SupportsLegacyCommonAreaPhones() {
 		t.Fatal("legacy /phone/common_area_phones should not be advertised unless it appears in the generated inventory")
 	}
-	if operation, ok := directory.operationByPath(http.MethodGet, "/phone/users"); !ok || operation.Name != phoneUsersListOperation {
+	users := requirePhoneDirectoryReader(t, phoneDirectoryUsers)
+	if operation, ok := directory.operationByPath(http.MethodGet, "/phone/users"); !ok || operation.Name != users.operationName {
 		t.Fatalf("expected current phone users operation lookup, got %#v %v", operation, ok)
 	}
 	if _, ok := directory.operationByPath(http.MethodGet, PhoneCommonAreaPhonesLegacyPath); ok {
 		t.Fatal("legacy common-area phones path unexpectedly exists in the generated inventory")
 	}
-	operation, err := directory.operation(phoneCommonAreasListOperation)
+	commonAreas := requirePhoneDirectoryReader(t, phoneDirectoryCommonAreas)
+	operation, err := directory.operation(commonAreas.operationName)
 	if err != nil {
 		t.Fatalf("current common-area operation missing: %v", err)
 	}
@@ -139,17 +116,31 @@ func TestPhoneDirectoryRequiresInitializedSDK(t *testing.T) {
 
 	client := &Client{SDK: &SDK{operations: map[string]*SDKOperation{}}}
 	_, err = client.PhoneDirectory().Users(context.Background(), PhoneDirectoryListOptions{})
-	if err == nil || !strings.Contains(err.Error(), phoneUsersListOperation) {
+	users := requirePhoneDirectoryReader(t, phoneDirectoryUsers)
+	if err == nil || !strings.Contains(err.Error(), users.operationName) {
 		t.Fatalf("expected missing operation error, got %v", err)
 	}
 }
 
+func TestPhoneDirectoryRejectsUnregisteredReader(t *testing.T) {
+	directory := buildPhoneDirectoryTestClient(t).PhoneDirectory()
+	unknown := phoneDirectoryReaderID("Unknown")
+
+	if _, err := directory.paginate(context.Background(), unknown, PhoneDirectoryListOptions{}); err == nil || !strings.Contains(err.Error(), "is not registered") {
+		t.Fatalf("expected unregistered paginated reader error, got %v", err)
+	}
+	if _, err := directory.iterAll(context.Background(), unknown, PhoneDirectoryListOptions{}); err == nil || !strings.Contains(err.Error(), "is not registered") {
+		t.Fatalf("expected unregistered flattened reader error, got %v", err)
+	}
+}
+
 func TestPhoneDirectoryQuerySupportsInitialNextPageToken(t *testing.T) {
-	query := (PhoneDirectoryListOptions{NextPageToken: "start", PageSize: 10}).query("next_page_token")
-	if len(query) != 1 || query["next_page_token"] != "start" {
+	descriptor := requirePhoneDirectoryReader(t, phoneDirectoryUsers)
+	query := (PhoneDirectoryListOptions{NextPageToken: "start", PageSize: 10}).query(descriptor)
+	if len(query) != 2 || query["next_page_token"] != "start" || query["page_size"] != 10 {
 		t.Fatalf("unexpected next token query: %#v", query)
 	}
-	if empty := (PhoneDirectoryListOptions{}).query("page_size", "next_page_token"); empty != nil {
+	if empty := (PhoneDirectoryListOptions{}).query(descriptor); empty != nil {
 		t.Fatalf("expected empty query to be nil, got %#v", empty)
 	}
 }
@@ -166,15 +157,11 @@ func buildPhoneDirectoryTestClient(t *testing.T) *Client {
 		path := r.URL.Path
 		query := r.URL.Query()
 		requests[path] = append(requests[path], cloneValues(query))
-		itemKey, ok := map[string]string{
-			"/v2/phone/users":              "users",
-			"/v2/phone/common_areas":       "common_areas",
-			"/v2/phone/shared_line_groups": "shared_line_groups",
-			"/v2/phone/call_queues":        "call_queues",
-		}[path]
+		descriptor, ok := phoneDirectoryReaderByPath(strings.TrimPrefix(path, "/v2"))
 		if !ok {
 			t.Fatalf("unexpected request path: %s", path)
 		}
+		itemKey := descriptor.itemKey
 		if query.Get("next_page_token") == "" {
 			return jsonResponse(http.StatusOK, fmt.Sprintf(`{"%[1]s":[{"id":"%[1]s-1"},{"id":"%[1]s-2"}],"next_page_token":"token-2","page_size":2,"total_records":3}`, itemKey)), nil
 		}
@@ -184,7 +171,7 @@ func buildPhoneDirectoryTestClient(t *testing.T) *Client {
 		return jsonResponse(http.StatusOK, fmt.Sprintf(`{"%[1]s":[{"id":"%[1]s-3"}],"next_page_token":"","page_size":2,"total_records":3}`, itemKey)), nil
 	})}
 	registry := &SchemaRegistry{
-		operations: phoneDirectorySchemaOperations(),
+		operations: phoneDirectorySchemaOperations(t),
 		validator:  &SchemaValidator{tools: &OpenAPITools{}},
 	}
 	client := &Client{
@@ -207,23 +194,17 @@ func buildPhoneDirectoryTestClient(t *testing.T) *Client {
 	return client
 }
 
-func phoneDirectorySchemaOperations() []SchemaOperation {
+func phoneDirectorySchemaOperations(t *testing.T) []SchemaOperation {
+	t.Helper()
 	operations := []SchemaOperation{}
-	for _, endpoint := range []struct {
-		path    string
-		itemKey string
-	}{
-		{path: "/phone/users", itemKey: "users"},
-		{path: "/phone/common_areas", itemKey: "common_areas"},
-		{path: "/phone/shared_line_groups", itemKey: "shared_line_groups"},
-		{path: "/phone/call_queues", itemKey: "call_queues"},
-	} {
+	for _, id := range phoneDirectoryReaderIDs {
+		descriptor := requirePhoneDirectoryReader(t, id)
 		operations = append(operations, SchemaOperation{
 			SchemaName:   "Phone",
 			Method:       http.MethodGet,
-			TemplatePath: endpoint.path,
-			PathRegex:    templatePathToRegex(endpoint.path),
-			OperationID:  endpoint.itemKey,
+			TemplatePath: descriptor.path,
+			PathRegex:    templatePathToRegex(descriptor.path),
+			OperationID:  descriptor.itemKey,
 			Responses: map[string]any{
 				"200": map[string]any{
 					"content": map[string]any{
@@ -231,7 +212,7 @@ func phoneDirectorySchemaOperations() []SchemaOperation {
 							"schema": map[string]any{
 								"type": "object",
 								"properties": map[string]any{
-									endpoint.itemKey:     map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+									descriptor.itemKey:   map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
 									"next_page_token":    map[string]any{"type": "string"},
 									"page_size":          map[string]any{"type": "integer"},
 									"total_records":      map[string]any{"type": "integer"},
@@ -248,34 +229,85 @@ func phoneDirectorySchemaOperations() []SchemaOperation {
 	return operations
 }
 
-func assertPhoneDirectoryRequests(t *testing.T, client *Client, path string, itemKey string, wantQuery map[string]string, omitQuery []string) {
+func phoneDirectoryReaderByPath(path string) (phoneDirectoryReaderDescriptor, bool) {
+	for _, id := range phoneDirectoryReaderIDs {
+		descriptor, ok := phoneDirectoryReaderDescriptors[id]
+		if !ok {
+			continue
+		}
+		if descriptor.path == path {
+			return descriptor, true
+		}
+	}
+	return phoneDirectoryReaderDescriptor{}, false
+}
+
+func requirePhoneDirectoryReader(t *testing.T, id phoneDirectoryReaderID) phoneDirectoryReaderDescriptor {
+	t.Helper()
+	descriptor, err := phoneDirectoryReader(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return descriptor
+}
+
+func assertPhoneDirectoryRequests(t *testing.T, client *Client, descriptor phoneDirectoryReaderDescriptor, options PhoneDirectoryListOptions) {
 	t.Helper()
 	requests := phoneDirectoryRequests(t, client)
+	path := "/v2" + descriptor.path
 	values := requests[path]
 	if len(values) != 4 {
 		t.Fatalf("expected four requests for %s after page and all reads, got %d: %#v", path, len(values), values)
 	}
 	for _, index := range []int{0, 2} {
-		for key, want := range wantQuery {
-			if got := values[index].Get(key); got != want {
-				t.Fatalf("%s request %d query %s: got %q want %q", itemKey, index, key, got, want)
+		for key, want := range phoneDirectoryOptionValues(options) {
+			got := values[index].Get(key)
+			if descriptor.allowsQuery(key) && got != want {
+				t.Fatalf("%s request %d query %s: got %q want %q", descriptor.itemKey, index, key, got, want)
+			}
+			if !descriptor.allowsQuery(key) && got != "" {
+				t.Fatalf("%s request %d should omit unsupported query %s=%q", descriptor.itemKey, index, key, got)
 			}
 		}
 		if got := values[index].Get("next_page_token"); got != "" {
-			t.Fatalf("%s first page unexpectedly included next_page_token %q", itemKey, got)
+			t.Fatalf("%s first page unexpectedly included next_page_token %q", descriptor.itemKey, got)
 		}
 	}
 	for _, index := range []int{1, 3} {
 		if got := values[index].Get("next_page_token"); got != "token-2" {
-			t.Fatalf("%s request %d next_page_token: got %q", itemKey, index, got)
+			t.Fatalf("%s request %d next_page_token: got %q", descriptor.itemKey, index, got)
 		}
 	}
-	for _, valuesIndex := range []int{0, 1, 2, 3} {
-		for _, key := range omitQuery {
-			if got := values[valuesIndex].Get(key); got != "" {
-				t.Fatalf("%s request %d should omit unsupported query %s=%q", itemKey, valuesIndex, key, got)
-			}
-		}
+}
+
+func phoneDirectoryPublicReaders(directory *PhoneDirectory, id phoneDirectoryReaderID) (
+	func(context.Context, PhoneDirectoryListOptions) ([]SDKPage, error),
+	func(context.Context, PhoneDirectoryListOptions) ([]any, error),
+) {
+	switch id {
+	case phoneDirectoryUsers:
+		return directory.Users, directory.AllUsers
+	case phoneDirectoryCommonAreas:
+		return directory.CommonAreas, directory.AllCommonAreas
+	case phoneDirectorySharedLineGroups:
+		return directory.SharedLineGroups, directory.AllSharedLineGroups
+	case phoneDirectoryCallQueues:
+		return directory.CallQueues, directory.AllCallQueues
+	default:
+		panic(fmt.Sprintf("unknown phone directory reader %q", id))
+	}
+}
+
+func phoneDirectoryOptionValues(options PhoneDirectoryListOptions) map[string]string {
+	return map[string]string{
+		"page_size":               fmt.Sprint(options.PageSize),
+		"site_id":                 options.SiteID,
+		"calling_type":            fmt.Sprint(options.CallingType),
+		"status":                  options.Status,
+		"department":              options.Department,
+		"cost_center":             options.CostCenter,
+		"keyword":                 options.Keyword,
+		"common_area_device_type": fmt.Sprint(options.CommonAreaDeviceType),
 	}
 }
 
