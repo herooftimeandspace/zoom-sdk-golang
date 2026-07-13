@@ -1,0 +1,86 @@
+name: quality
+
+on:
+  push:
+    branches: ["main", "staging", "dev"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage gate
+        run: |
+          set -euo pipefail
+          go test ./...
+          packages="$(go list ./... | grep -Ev '^github.com/herooftimeandspace/zoom-sdk-golang/scripts($|/parity$)')"
+          go test ${packages} -coverprofile=coverage.out -covermode=atomic
+          go tool cover -func=coverage.out | tee coverage.txt
+          coverage="$(go tool cover -func=coverage.out | awk '/total:/ {print substr($3, 1, length($3)-1)}')"
+          awk -v coverage="${coverage}" 'BEGIN { if ((coverage + 0) < 95) exit 1 }'
+
+      - name: Verify docs render
+        run: |
+          for package in $(go list ./...); do
+            go doc "${package}" >/dev/null
+          done
+
+  parity:
+    name: parity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Go SDK
+        uses: actions/checkout@v7
+
+      - name: Checkout Python source of truth
+        uses: actions/checkout@v7
+        with:
+          repository: herooftimeandspace/zoom-sdk-python
+          ref: dev
+          path: zoom-sdk-python
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Verify vendored parity assets are in sync
+        env:
+          ZOOM_SDK_PYTHON_ROOT: ${{ github.workspace }}/zoom-sdk-python
+        run: go run ./scripts/parity sync --check
+
+      - name: Run vendored parity checks
+        run: go run ./scripts/parity verify
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run govulncheck
+        run: go tool govulncheck ./...

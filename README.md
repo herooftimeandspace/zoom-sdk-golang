@@ -127,7 +127,7 @@ requiring this repository to build or mutate the upstream Python project.
 
 ## CI expectations
 
-The migration CI runs three tracks in parallel:
+The `quality` workflow runs three tracks in parallel:
 
 - Go SDK/library unit tests with a hard `>=95%` coverage floor
 - vendored parity checks against Python-derived assets
@@ -136,9 +136,28 @@ The migration CI runs three tracks in parallel:
 The coverage gate is enforced directly in CI and locally by running:
 
 ```bash
-GOCACHE="$(pwd)/.gocache" go test ./... -coverprofile=coverage.out -covermode=atomic
+packages="$(go list ./... | grep -Ev '^github.com/herooftimeandspace/zoom-sdk-golang/scripts($|/parity$)')"
+GOCACHE="$(pwd)/.gocache" go test ${packages} -coverprofile=coverage.out -covermode=atomic
 GOCACHE="$(pwd)/.gocache" go tool cover -func=coverage.out
 ```
+
+Command packages under `scripts/` are tested by `go test ./...` but are excluded from the SDK runtime coverage denominator. The 95% floor governs the importable SDK rather than maintenance command entrypoints.
+
+## Promotion and releases
+
+This repository uses the same protected promotion chain as the related SDK repositories:
+
+- feature and maintenance pull requests target `dev`
+- successful `dev` checks create or refresh a `dev -> staging` promotion pull request
+- successful `staging` checks create or refresh a prepared `staging -> main` promotion pull request
+- promotion pull requests carry exactly one of `semver:patch`, `semver:minor`, or `semver:major`
+- merging the prepared promotion into `main` creates the next `vMAJOR.MINOR.PATCH` tag and GitHub Release
+
+The deterministic required checks are `unit`, `parity`, and `security`. The final promotion also requires `release-prep`, which confirms that the exact merge head contains the current `main` and `staging` tips and has one unambiguous release label.
+
+Go module releases are tag-based, so the release pipeline does not maintain a separate version file. Automation uses the repository `GITHUB_TOKEN`; no personal access token is required.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the branch protections, exact local verification commands, semantic-version selection rules, and maintainer bootstrap settings.
 
 ## Maintainer workflow
 
@@ -152,3 +171,5 @@ When the Python source of truth changes:
 During migration, a change is only considered viable if it keeps behavior,
 coverage, security posture, and the vendored parity inventory aligned with the
 Python reference.
+
+New work branches from `dev` and returns to `dev` through a pull request. Do not target `staging` or `main` directly; those branches receive changes only through the automated promotion pull requests described above.
