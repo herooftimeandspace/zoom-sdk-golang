@@ -18,8 +18,8 @@ var requiredVendoredOperations = []string{
 	"chat.channels.get_account",
 }
 
-func syncParityAssets(repoRoot string, checkOnly bool) error {
-	paths, err := parityPaths(repoRoot)
+func syncParityAssets(repoRoot string, pythonRoot string, checkOnly bool) error {
+	paths, err := parityPaths(repoRoot, pythonRoot)
 	if err != nil {
 		return err
 	}
@@ -97,12 +97,11 @@ type paritySyncPaths struct {
 	goldenPairs []parityPair
 }
 
-func parityPaths(repoRoot string) (*paritySyncPaths, error) {
+func parityPaths(repoRoot string, pythonRoot string) (*paritySyncPaths, error) {
 	root := repoRoot
 	if root == "" {
 		root = discoverProjectRoot(".")
 	}
-	pythonRoot := os.Getenv("ZOOM_SDK_PYTHON_ROOT")
 	if pythonRoot == "" {
 		pythonRoot = filepath.Join(filepath.Dir(root), "zoom-sdk-python")
 	}

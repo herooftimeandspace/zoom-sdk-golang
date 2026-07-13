@@ -14,10 +14,10 @@ export GOCACHE="$(pwd)/.gocache"
 export GOMODCACHE="$(pwd)/.gomodcache"
 ```
 
-The Python repository supplies the canonical Zoom schemas and generated SDK inventory. Set `ZOOM_SDK_PYTHON_ROOT` when it is not available at the default sibling path:
+The Python repository supplies the canonical Zoom schemas and generated SDK inventory. Pass its checkout path directly to the parity sync command when it is not available at the default sibling path:
 
 ```bash
-export ZOOM_SDK_PYTHON_ROOT="../zoom-sdk-python"
+go run ./scripts/parity sync --check --python-root "../zoom-sdk-python"
 ```
 
 ## Branch and pull-request flow
