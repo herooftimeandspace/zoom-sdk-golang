@@ -98,6 +98,38 @@ consumer code. The SDK logger records request metadata such as method, path,
 status, retry attempt, and request IDs; it does not intentionally log response
 bodies or Authorization header values.
 
+## Runtime schemas and compatibility responses
+
+The SDK embeds its vendored endpoint, master-account, and webhook schemas in the
+Go module. `NewClient` therefore validates responses without requiring the
+downstream binary's working directory or container image to contain this
+repository's `internal/parity/schemas` tree. Explicit schema roots remain
+available through the registry constructors for parity tooling and tests.
+
+`Settings.BaseURL` is authoritative when it differs from the default Zoom API
+URL. This allows downstream applications to use a staging service, proxy, or
+mock server without a schema-declared OpenAPI server URL redirecting requests to
+Zoom production.
+
+Most callers should continue to use validated operations such as `Raw`, `Call`,
+and `Paginate`. When a provider response must be normalized before schema
+validation, `SDKOperation.RawBody` returns the response bytes while preserving
+SDK-owned authentication, retries, URL construction, custom headers, and
+timeouts:
+
+```go
+body, err := operation.RawBody(ctx, pathParams, query, nil, nil)
+if err != nil {
+	return err
+}
+// Decode, normalize, and validate body before accepting application records.
+```
+
+Both validated and raw-body successful responses are limited to 4 MiB. The raw
+path deliberately skips response schema validation, so the downstream decoder
+must reject malformed or incomplete provider data rather than silently
+accepting a partial result.
+
 ## Vendored parity assets
 
 Migration parity is enforced with committed artifacts under
