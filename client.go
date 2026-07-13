@@ -92,7 +92,7 @@ func (c *Client) Request(ctx context.Context, method string, path string, option
 	if err != nil {
 		return nil, err
 	}
-	baseURL := c.schemaRegistry.BaseURLForRequest(method, actualPath, c.settings.BaseURL)
+	baseURL := c.baseURLForRequest(method, actualPath)
 	requestURL, err := buildURL(baseURL, actualPath, options.Query)
 	if err != nil {
 		return nil, err
@@ -159,6 +159,13 @@ func (c *Client) Request(ctx context.Context, method string, path string, option
 		return nil, parseErr
 	}
 	return nil, lastErr
+}
+
+func (c *Client) baseURLForRequest(method string, actualPath string) string {
+	if c.settings.BaseURL != DefaultSettings().BaseURL {
+		return c.settings.BaseURL
+	}
+	return c.schemaRegistry.BaseURLForRequest(method, actualPath, c.settings.BaseURL)
 }
 
 // ValidateWebhook validates a webhook payload.

@@ -875,6 +875,51 @@ func TestClientConstructorsAndRequestBranches(t *testing.T) {
 	}
 }
 
+func TestClientRequestHonorsCustomBaseURL(t *testing.T) {
+	settings := DefaultSettings()
+	settings.BaseURL = "https://proxy.zoom.test/v2"
+	registry := &SchemaRegistry{
+		operations: []SchemaOperation{{
+			SchemaName:   "Users",
+			Method:       "GET",
+			TemplatePath: "/users/{userId}",
+			PathRegex:    templatePathToRegex("/users/{userId}"),
+			Responses: map[string]any{"200": map[string]any{"content": map[string]any{"application/json": map[string]any{"schema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+			}}}}},
+			Spec:      map[string]any{},
+			ServerURL: "https://api.zoom.us/v2",
+		}},
+		validator: &SchemaValidator{tools: &OpenAPITools{}},
+	}
+	var gotURL string
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"id":"123"}`)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+		}, nil
+	})}
+	client := &Client{
+		settings:       settings,
+		httpClient:     httpClient,
+		logger:         DefaultLogger(),
+		schemaRegistry: registry,
+		tokenManager:   NewTokenManager(httpClient, settings, "token", DefaultLogger()),
+	}
+
+	if _, err := client.Request(context.Background(), "GET", "/users/{userId}", RequestOptions{
+		PathParams: map[string]string{"userId": "me"},
+	}); err != nil {
+		t.Fatalf("request with custom base URL: %v", err)
+	}
+	if gotURL != "https://proxy.zoom.test/v2/users/me" {
+		t.Fatalf("request URL = %q, want custom base URL override", gotURL)
+	}
+}
+
 func TestConstructorAndRegistryFailureBranches(t *testing.T) {
 	tmp := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tmp, "go.mod"), []byte("module example.com/bad\n"), 0o644); err != nil {
