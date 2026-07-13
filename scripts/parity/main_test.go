@@ -20,7 +20,7 @@ func TestRunUsageAndUnknownCommand(t *testing.T) {
 func TestRunSyncAndVerify(t *testing.T) {
 	tmp := t.TempDir()
 	goRoot := filepath.Join(tmp, "zoom-sdk-golang")
-	pythonRoot := filepath.Join(tmp, "zoom-sdk-python")
+	pythonRoot := filepath.Join(tmp, "python-source")
 
 	writeJSON := func(path string, payload any) {
 		t.Helper()
@@ -63,10 +63,10 @@ func TestRunSyncAndVerify(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	if err := run([]string{"sync"}); err != nil {
+	if err := run([]string{"sync", "--python-root", pythonRoot}); err != nil {
 		t.Fatalf("sync command: %v", err)
 	}
-	if err := run([]string{"sync", "--check"}); err != nil {
+	if err := run([]string{"sync", "--check", "--python-root", pythonRoot}); err != nil {
 		t.Fatalf("sync check command: %v", err)
 	}
 	if err := run([]string{"verify"}); err != nil {

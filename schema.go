@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -62,22 +62,28 @@ type SchemaValidator struct {
 // NewSchemaRegistry loads vendored path-based OpenAPI operations.
 func NewSchemaRegistry(root string) (*SchemaRegistry, error) {
 	if root == "" {
-		root = filepath.Join(discoverProjectRoot("."), "internal", "parity", "schemas")
+		return newSchemaRegistryFromFS(parityAssets, []string{
+			"internal/parity/schemas/endpoints",
+			"internal/parity/schemas/master_accounts",
+		})
 	}
+	return newSchemaRegistryFromFS(os.DirFS(root), []string{"endpoints", "master_accounts"})
+}
+
+func newSchemaRegistryFromFS(source fs.FS, familyRoots []string) (*SchemaRegistry, error) {
 	registry := &SchemaRegistry{
 		operations: []SchemaOperation{},
 		validator:  &SchemaValidator{tools: &OpenAPITools{}},
 	}
-	for _, family := range []string{"endpoints", "master_accounts"} {
-		familyRoot := filepath.Join(root, family)
-		err := filepath.WalkDir(familyRoot, func(path string, d fs.DirEntry, err error) error {
+	for _, familyRoot := range familyRoots {
+		err := fs.WalkDir(source, familyRoot, func(filePath string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if d.IsDir() || !strings.HasSuffix(path, ".json") {
+			if d.IsDir() || !strings.HasSuffix(filePath, ".json") {
 				return nil
 			}
-			operations, loadErr := loadPathOperations(path)
+			operations, loadErr := loadPathOperations(source, filePath)
 			if loadErr != nil {
 				return loadErr
 			}
@@ -100,20 +106,24 @@ func NewSchemaRegistry(root string) (*SchemaRegistry, error) {
 // NewWebhookRegistry loads vendored webhook OpenAPI operations.
 func NewWebhookRegistry(root string) (*WebhookRegistry, error) {
 	if root == "" {
-		root = filepath.Join(discoverProjectRoot("."), "internal", "parity", "schemas", "webhooks")
+		return newWebhookRegistryFromFS(parityAssets, "internal/parity/schemas/webhooks")
 	}
+	return newWebhookRegistryFromFS(os.DirFS(root), "webhooks")
+}
+
+func newWebhookRegistryFromFS(source fs.FS, root string) (*WebhookRegistry, error) {
 	registry := &WebhookRegistry{
 		operations: []WebhookOperation{},
 		validator:  &SchemaValidator{tools: &OpenAPITools{}},
 	}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(source, root, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".json") {
+		if d.IsDir() || !strings.HasSuffix(filePath, ".json") {
 			return nil
 		}
-		operations, loadErr := loadWebhookOperations(path)
+		operations, loadErr := loadWebhookOperations(source, filePath)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -443,12 +453,12 @@ func (t *OpenAPITools) normalizeVariantPayload(payload any, schema map[string]an
 	return bestPayload
 }
 
-func loadPathOperations(path string) ([]SchemaOperation, error) {
-	spec, err := loadJSON(path)
+func loadPathOperations(source fs.FS, filePath string) ([]SchemaOperation, error) {
+	spec, err := loadJSON(source, filePath)
 	if err != nil {
 		return nil, err
 	}
-	schemaName := specTitle(spec, filepath.Base(path))
+	schemaName := specTitle(spec, path.Base(filePath))
 	serverURL := firstServerURL(spec)
 	paths, _ := spec["paths"].(map[string]any)
 	operations := []SchemaOperation{}
@@ -488,12 +498,12 @@ func loadPathOperations(path string) ([]SchemaOperation, error) {
 	return operations, nil
 }
 
-func loadWebhookOperations(path string) ([]WebhookOperation, error) {
-	spec, err := loadJSON(path)
+func loadWebhookOperations(source fs.FS, filePath string) ([]WebhookOperation, error) {
+	spec, err := loadJSON(source, filePath)
 	if err != nil {
 		return nil, err
 	}
-	schemaName := specTitle(spec, filepath.Base(path))
+	schemaName := specTitle(spec, path.Base(filePath))
 	webhooks, _ := spec["webhooks"].(map[string]any)
 	operations := []WebhookOperation{}
 	tools := &OpenAPITools{}
@@ -795,8 +805,8 @@ func enumContains(values []any, payload any) bool {
 	return false
 }
 
-func loadJSON(path string) (map[string]any, error) {
-	payload, err := os.ReadFile(path)
+func loadJSON(source fs.FS, filePath string) (map[string]any, error) {
+	payload, err := fs.ReadFile(source, filePath)
 	if err != nil {
 		return nil, err
 	}
