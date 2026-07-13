@@ -132,3 +132,87 @@ func TestClientRequestValidatesResponse(t *testing.T) {
 		t.Fatalf("unexpected payload: %#v", value)
 	}
 }
+
+func TestClientRequestRawBodySkipsSchemaValidationButKeepsRequestBehavior(t *testing.T) {
+	settings := DefaultSettings()
+	settings.BaseURL = "https://proxy.zoom.test/v2"
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if auth := r.Header.Get("Authorization"); auth != "Bearer test-token" {
+			t.Fatalf("unexpected authorization header: %s", auth)
+		}
+		if r.URL.String() != "https://proxy.zoom.test/v2/users/me" {
+			t.Fatalf("unexpected request URL: %s", r.URL.String())
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"message":"shape changed"}`)),
+		}, nil
+	})}
+	client := &Client{
+		settings:   settings,
+		httpClient: httpClient,
+		logger:     DefaultLogger(),
+		schemaRegistry: &SchemaRegistry{
+			operations: []SchemaOperation{{
+				SchemaName:   "Users",
+				Method:       "GET",
+				TemplatePath: "/users/{userId}",
+				PathRegex:    templatePathToRegex("/users/{userId}"),
+				Responses: map[string]any{"200": map[string]any{"content": map[string]any{"application/json": map[string]any{"schema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"id": map[string]any{"type": "string"}},
+					"required":   []any{"id"},
+				}}}}},
+				Spec:      map[string]any{},
+				ServerURL: "https://api.zoom.us/v2",
+			}},
+			validator: &SchemaValidator{tools: &OpenAPITools{}},
+		},
+		tokenManager: NewTokenManager(httpClient, settings, "test-token", DefaultLogger()),
+	}
+
+	body, err := client.RequestRawBody(context.Background(), "GET", "/users/{userId}", RequestOptions{PathParams: map[string]string{"userId": "me"}})
+	if err != nil {
+		t.Fatalf("raw body request: %v", err)
+	}
+	if string(body) != `{"message":"shape changed"}` {
+		t.Fatalf("raw body = %s", body)
+	}
+}
+
+func TestClientRequestRejectsOversizedSuccessfulResponse(t *testing.T) {
+	settings := DefaultSettings()
+	settings.BaseURL = "https://api.zoom.us/v2"
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", int(maxResponseBodyBytes)+1))),
+		}, nil
+	})}
+	client := &Client{
+		settings:   settings,
+		httpClient: httpClient,
+		logger:     DefaultLogger(),
+		schemaRegistry: &SchemaRegistry{
+			operations: []SchemaOperation{{
+				SchemaName:   "Users",
+				Method:       "GET",
+				TemplatePath: "/users",
+				PathRegex:    templatePathToRegex("/users"),
+				Responses:    map[string]any{"200": map[string]any{"content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"type": "object"}}}}},
+				Spec:         map[string]any{},
+			}},
+			validator: &SchemaValidator{tools: &OpenAPITools{}},
+		},
+		tokenManager: NewTokenManager(httpClient, settings, "test-token", DefaultLogger()),
+	}
+
+	if _, err := client.Request(context.Background(), "GET", "/users", RequestOptions{}); err == nil || !strings.Contains(err.Error(), "response body exceeds") {
+		t.Fatalf("expected bounded response error, got %v", err)
+	}
+	if _, err := client.RequestRawBody(context.Background(), "GET", "/users", RequestOptions{}); err == nil || !strings.Contains(err.Error(), "response body exceeds") {
+		t.Fatalf("expected bounded raw response error, got %v", err)
+	}
+}

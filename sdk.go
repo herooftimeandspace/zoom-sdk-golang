@@ -160,6 +160,17 @@ func (o *SDKOperation) Raw(ctx context.Context, pathParams map[string]string, qu
 	})
 }
 
+// RawBody invokes the low-level request path and returns the bounded response
+// body without SDK schema validation for compatibility decoders.
+func (o *SDKOperation) RawBody(ctx context.Context, pathParams map[string]string, query map[string]any, jsonBody any, headers map[string]string) ([]byte, error) {
+	return o.client.RequestRawBody(ctx, o.HTTPMethod, o.Path, RequestOptions{
+		PathParams: pathParams,
+		Query:      query,
+		JSONBody:   jsonBody,
+		Headers:    headers,
+	})
+}
+
 // Call invokes the operation with SDK-level parameter defaults and validation.
 func (o *SDKOperation) Call(ctx context.Context, options SDKCallOptions) (any, error) {
 	pathParams, err := o.resolvePathParams(options.PathParams)
